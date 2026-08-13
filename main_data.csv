@@ -1,0 +1,249 @@
+# =============================================================================
+# R REPLICATION SCRIPT: Asymmetric Geopolitical Risk and Macroeconomic Resilience
+# Energy Economics Replication Package
+# Author: Benbouziane Mohamed
+# Date: August 2026
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# 0. SETUP
+# ---------------------------------------------------------------------------
+rm(list = ls())
+
+# Install required packages if missing
+packages <- c("plm", "dplyr", "readr", "sandwich", "lmtest", "texreg", "tibble")
+install_if_missing <- function(pkg) {
+  if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+    install.packages(pkg)
+    library(pkg, character.only = TRUE)
+  }
+}
+invisible(sapply(packages, install_if_missing))
+
+# Set working directory (EDIT THIS PATH)
+setwd("C:/your/path/to/replication_package")
+
+# Paths
+root <- getwd()
+data_dir <- file.path(root, "data")
+output_dir <- file.path(root, "output", "tables")
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+# ---------------------------------------------------------------------------
+# 1. LOAD AND PREPARE DATA
+# ---------------------------------------------------------------------------
+# Load CSV
+df <- read_csv(file.path(data_dir, "main_data.csv")) %>%
+  mutate(country_id = as.integer(factor(country)))
+
+# Panel structure
+pdf <- pdata.frame(df, index = c("country_id", "year"))
+
+# First differences
+diff_vars <- c("reserves_pct_gdp", "gdp_growth", "inflation_cpi", 
+               "gpr_global", "ctot_imf", "trade_openness", "control_corruption_est")
+for (v in diff_vars) {
+  pdf[[paste0("d_", v)]] <- diff(pdf[[v]])
+}
+
+# Lags
+for (v in diff_vars) {
+  pdf[[paste0("l_", v)]] <- lag(pdf[[v]], 1)
+}
+
+# NARDL partial sums
+pdf$d_gpr_pos <- ifelse(pdf$d_gpr_global > 0, pdf$d_gpr_global, 0)
+pdf$d_gpr_neg <- ifelse(pdf$d_gpr_global < 0, pdf$d_gpr_global, 0)
+
+# Cumulative partial sums by country
+pdf <- pdf %>%
+  as.data.frame() %>%
+  group_by(country_id) %>%
+  mutate(
+    gpr_ps = cumsum(ifelse(is.na(d_gpr_pos), 0, d_gpr_pos)),
+    gpr_ns = cumsum(ifelse(is.na(d_gpr_neg), 0, d_gpr_neg))
+  ) %>%
+  ungroup()
+
+# Re-convert to panel
+pdf <- pdata.frame(pdf, index = c("country_id", "year"))
+
+# ---------------------------------------------------------------------------
+# 2. MG-ARDL FUNCTION (Pesaran, Shin & Smith 1999)
+# ---------------------------------------------------------------------------
+mg_ardl_r <- function(data, outcome, xvars, oil_filter = NULL) {
+
+  if (!is.null(oil_filter)) {
+    data <- data[data$oil_exporter == oil_filter, ]
+  }
+
+  countries <- unique(data$country_id)
+  N <- length(countries)
+  k <- length(xvars)
+
+  # Storage
+  phi_vec <- numeric(N)
+  lr_mat <- matrix(NA, nrow = N, ncol = k)
+  sr_mat <- matrix(NA, nrow = N, ncol = k)
+  colnames(lr_mat) <- colnames(sr_mat) <- xvars
+
+  for (i in seq_along(countries)) {
+    c <- countries[i]
+    sub <- data[data$country_id == c, ]
+
+    # Ensure sufficient observations
+    if (nrow(sub) < 8) next
+
+    # Build formula: d_y ~ L.y + L.x1 + L.x2 + ... + d.x1 + d.x2 + ...
+    y_lag <- paste0("l_", outcome)
+    x_lags <- paste0("l_", xvars)
+    x_diffs <- paste0("d_", xvars)
+
+    rhs <- c(y_lag, x_lags, x_diffs)
+    formula_str <- paste0("d_", outcome, " ~ ", paste(rhs, collapse = " + "))
+
+    fit <- try(lm(as.formula(formula_str), data = sub), silent = TRUE)
+    if (inherits(fit, "try-error")) next
+
+    coefs <- coef(fit)
+    phi <- coefs[y_lag]
+
+    if (is.na(phi) || phi == 0) next
+
+    phi_vec[i] <- phi
+
+    for (j in seq_along(xvars)) {
+      theta_name <- x_lags[j]
+      gamma_name <- x_diffs[j]
+
+      if (theta_name %in% names(coefs)) {
+        lr_mat[i, j] <- -coefs[theta_name] / phi
+      }
+      if (gamma_name %in% names(coefs)) {
+        sr_mat[i, j] <- coefs[gamma_name]
+      }
+    }
+  }
+
+  # Mean Group statistics
+  results <- tibble()
+
+  for (j in seq_along(xvars)) {
+    lr_vals <- lr_mat[, j]
+    sr_vals <- sr_mat[, j]
+
+    lr_mean <- mean(lr_vals, na.rm = TRUE)
+    lr_sd   <- sd(lr_vals, na.rm = TRUE)
+    lr_se   <- lr_sd / sqrt(sum(!is.na(lr_vals)))
+    lr_t    <- lr_mean / lr_se
+    lr_p    <- 2 * pt(abs(lr_t), df = sum(!is.na(lr_vals)) - 1, lower.tail = FALSE)
+
+    sr_mean <- mean(sr_vals, na.rm = TRUE)
+    sr_sd   <- sd(sr_vals, na.rm = TRUE)
+    sr_se   <- sr_sd / sqrt(sum(!is.na(sr_vals)))
+    sr_t    <- sr_mean / sr_se
+    sr_p    <- 2 * pt(abs(sr_t), df = sum(!is.na(sr_vals)) - 1, lower.tail = FALSE)
+
+    results <- bind_rows(results, tibble(
+      variable = xvars[j],
+      lr_coef = lr_mean, lr_se = lr_se, lr_t = lr_t, lr_p = lr_p,
+      sr_coef = sr_mean, sr_se = sr_se, sr_t = sr_t, sr_p = sr_p
+    ))
+  }
+
+  phi_mean <- mean(phi_vec, na.rm = TRUE)
+  phi_se   <- sd(phi_vec, na.rm = TRUE) / sqrt(sum(!is.na(phi_vec)))
+
+  list(phi = c(mean = phi_mean, se = phi_se), results = results, N = sum(!is.na(phi_vec)))
+}
+
+# ---------------------------------------------------------------------------
+# 3. RUN BASELINE MODELS (Table 2)
+# ---------------------------------------------------------------------------
+xvars <- c("gpr_global", "ctot_imf", "trade_openness", "control_corruption_est")
+
+# Reserves - Full Sample
+res_full <- mg_ardl_r(as.data.frame(pdf), "reserves_pct_gdp", xvars)
+cat("\n=== RESERVES - FULL SAMPLE ===\n")
+cat("Speed of Adjustment:", res_full$phi["mean"], "(SE:", res_full$phi["se"], ")\n")
+print(res_full$results)
+
+# Reserves - Oil Exporters
+res_oil <- mg_ardl_r(as.data.frame(pdf), "reserves_pct_gdp", xvars, oil_filter = 1)
+cat("\n=== RESERVES - OIL EXPORTERS ===\n")
+print(res_oil$results)
+
+# Reserves - Non-Oil Exporters
+res_nonoil <- mg_ardl_r(as.data.frame(pdf), "reserves_pct_gdp", xvars, oil_filter = 0)
+cat("\n=== RESERVES - NON-OIL EXPORTERS ===\n")
+print(res_nonoil$results)
+
+# ---------------------------------------------------------------------------
+# 4. NARDL ASYMMETRY (Table 3)
+# ---------------------------------------------------------------------------
+nardl_mg_r <- function(data, outcome, oil_filter = NULL) {
+  if (!is.null(oil_filter)) data <- data[data$oil_exporter == oil_filter, ]
+
+  countries <- unique(data$country_id)
+  N <- length(countries)
+
+  phi_vec <- numeric(N)
+  b_pos <- numeric(N)
+  b_neg <- numeric(N)
+
+  for (i in seq_along(countries)) {
+    c <- countries[i]
+    sub <- data[data$country_id == c, ]
+    if (nrow(sub) < 8) next
+
+    formula_str <- paste0("d_", outcome, " ~ l_", outcome, " + l_gpr_ps + l_gpr_ns + l_ctot_imf + l_trade_openness + l_control_corruption_est + d_gpr_ps + d_gpr_ns + d_ctot_imf + d_trade_openness + d_control_corruption_est")
+
+    fit <- try(lm(formula_str, data = sub), silent = TRUE)
+    if (inherits(fit, "try-error")) next
+
+    coefs <- coef(fit)
+    phi <- coefs[paste0("l_", outcome)]
+    if (is.na(phi) || phi == 0) next
+
+    phi_vec[i] <- phi
+    if ("l_gpr_ps" %in% names(coefs)) b_pos[i] <- -coefs["l_gpr_ps"] / phi
+    if ("l_gpr_ns" %in% names(coefs)) b_neg[i] <- -coefs["l_gpr_ns"] / phi
+  }
+
+  mg_pos <- mean(b_pos, na.rm = TRUE)
+  se_pos <- sd(b_pos, na.rm = TRUE) / sqrt(sum(!is.na(b_pos)))
+  t_pos  <- mg_pos / se_pos
+  p_pos  <- 2 * pt(abs(t_pos), df = sum(!is.na(b_pos)) - 1, lower.tail = FALSE)
+
+  mg_neg <- mean(b_neg, na.rm = TRUE)
+  se_neg <- sd(b_neg, na.rm = TRUE) / sqrt(sum(!is.na(b_neg)))
+  t_neg  <- mg_neg / se_neg
+  p_neg  <- 2 * pt(abs(t_neg), df = sum(!is.na(b_neg)) - 1, lower.tail = FALSE)
+
+  # Wald test for symmetry
+  diff <- b_pos - b_neg
+  mg_diff <- mean(diff, na.rm = TRUE)
+  se_diff <- sd(diff, na.rm = TRUE) / sqrt(sum(!is.na(diff)))
+  t_diff  <- mg_diff / se_diff
+  p_diff  <- 2 * pt(abs(t_diff), df = sum(!is.na(diff)) - 1, lower.tail = FALSE)
+  chi2    <- t_diff^2
+
+  cat("\n=== NARDL ASYMMETRY RESULTS ===\n")
+  cat("Speed of Adjustment:", mean(phi_vec, na.rm = TRUE), "\n")
+  cat("LR GPR Positive:", mg_pos, "(SE:", se_pos, ", t:", t_pos, ", p:", p_pos, ")\n")
+  cat("LR GPR Negative:", mg_neg, "(SE:", se_neg, ", t:", t_neg, ", p:", p_neg, ")\n")
+  cat("Wald Test (H0: beta+ = beta-): chi2(1) =", chi2, ", p =", p_diff, "\n")
+  cat("Countries:", sum(!is.na(phi_vec)), "\n")
+
+  invisible(list(phi = mean(phi_vec, na.rm = TRUE), pos = mg_pos, neg = mg_neg, wald = chi2, p_wald = p_diff))
+}
+
+nardl_res <- nardl_mg_r(as.data.frame(pdf), "reserves_pct_gdp")
+
+# ---------------------------------------------------------------------------
+# 5. SAVE RESULTS
+# ---------------------------------------------------------------------------
+write_csv(res_full$results, file.path(output_dir, "Table2_Reserves_Full.csv"))
+write_csv(res_oil$results, file.path(output_dir, "Table2_Reserves_Oil.csv"))
+
+cat("\nR replication complete. Results saved to", output_dir, "\n")

@@ -1,0 +1,31 @@
+Variable Name,Description,Unit,Source,Type,Notes
+country,Country name,String,Author construction,Identifier,
+iso3c,ISO 3166-1 alpha-3 country code,String,ISO,Identifier,
+year,Calendar year,Integer,Author construction,Time,2000–2024
+country_id,Numeric country identifier,Integer,Author construction,Identifier,Stata encode of country
+gpr_global,Global Geopolitical Risk Index,Index points (base=100),Caldara & Iacoviello (2022),Explanatory,Annual average of monthly index
+gpr_country,Country-specific GPR Index,Index points,Caldara & Iacoviello (2022),Explanatory,Available for subset of countries; used in robustness
+reserves_pct_gdp,Foreign reserves as share of GDP,Percentage,IMF IFS,Dependent,Total reserves minus gold / GDP × 100
+gdp_growth,Real GDP growth rate,Percentage per annum,World Bank WDI / IMF WEO,Dependent,"Constant prices, national sources"
+inflation_cpi,Consumer price inflation,Percentage per annum,IMF IFS / National statistics,Dependent,Annual average CPI change
+ctot_imf,Commodity terms of trade index,Index (2010=100),IMF WEO,Control,Export unit value / Import unit value
+trade_openness,Trade openness,Percentage,World Bank WDI,Control,(Exports + Imports) / GDP × 100
+control_corruption_est,Control of Corruption (WGI estimate),Standardized score,World Bank WGI,Control,Range: -2.5 (weak) to +2.5 (strong)
+rule_of_law_est,Rule of Law (WGI estimate),Standardized score,World Bank WGI,Control,Range: -2.5 to +2.5
+oil_exporter,Oil exporter dummy,"Binary {0,1}",Author construction,Treatment,1 if fuel exports > 30% of total exports (2000–2020 avg)
+de_facto_peg,De facto pegged exchange rate dummy,"Binary {0,1}","Ilzetzki, Reinhart & Rogoff (2019)",Control,1 if de facto peg or currency board
+gprc_available,Country-specific GPR availability flag,"Binary {0,1}",Author construction,Indicator,1 if country-specific GPR data exists
+d_reserves,First difference of reserves_pct_gdp,Percentage points,Author construction,Transformed,Generated for ARDL error-correction form
+d_gdp_growth,First difference of gdp_growth,Percentage points,Author construction,Transformed,
+d_inflation_cpi,First difference of inflation_cpi,Percentage points,Author construction,Transformed,
+d_gpr,First difference of gpr_global,Index points,Author construction,Transformed,
+d_ctot,First difference of ctot_imf,Index points,Author construction,Transformed,
+d_trade,First difference of trade_openness,Percentage points,Author construction,Transformed,
+d_corruption,First difference of control_corruption_est,Score points,Author construction,Transformed,
+l_reserves,Lagged reserves_pct_gdp,Percentage,Author construction,Transformed,1-year lag
+l_gpr,Lagged gpr_global,Index points,Author construction,Transformed,1-year lag
+gpr_ps,GPR positive partial sum,Index points,Author construction,Transformed,Cumulative sum of positive ΔGPR (NARDL)
+gpr_ns,GPR negative partial sum,Index points,Author construction,Transformed,Cumulative sum of negative ΔGPR (NARDL)
+valid_reserves,Flag for valid MG-ARDL estimation (reserves),"Binary {0,1}",Author construction,Indicator,1 if country has ≥10 obs after lag/diff creation
+valid_growth,Flag for valid MG-ARDL estimation (growth),"Binary {0,1}",Author construction,Indicator,1 if country has ≥10 obs after lag/diff creation
+valid_inflation,Flag for valid MG-ARDL estimation (inflation),"Binary {0,1}",Author construction,Indicator,1 if country has ≥10 obs after lag/diff creation
