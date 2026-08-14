@@ -183,7 +183,7 @@ For questions about replication, data, or code:
 **Benbouziane Mohamed**  
 Professor of Economics  
 Algerian University  
-Email: [your-email@university.dz]  
+Email: mohamed.benbouziane@univ-tlemcen.dz 
 GitHub: [@your-github-handle]
 
 ---
